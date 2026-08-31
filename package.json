@@ -7,10 +7,12 @@
     "./browser": "./src/browser.ts",
     "./contracts": "./src/contracts.ts",
     "./server": {
+      "workerd": "./src/server.ts",
       "browser": null,
       "default": "./src/server.ts"
     },
     "./schema": {
+      "workerd": "./src/schema.ts",
       "browser": null,
       "default": "./src/schema.ts"
     }

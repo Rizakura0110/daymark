@@ -17,10 +17,11 @@
 ### コマンド・検証結果
 
 - `pnpm install --frozen-lockfile`: pass
-- `pnpm check`: format、lint、TypeScript、2 files・6 tests、coverage、宣言付きbuild、auditがpass
+- `pnpm check`: format、lint、TypeScript、2 files・8 tests、coverage、宣言付きbuild、auditがpass
 - stub coverage: statements/branches/functions/lines各100%（分岐なし）
 - 単体audit: 既知脆弱性なし
 - schemaが空、業務・認証・networkへの依存がないことをtestで確認
+- Wranglerはworkerd/worker/browser条件を同時に使うため、`workerd`をbrowser拒否より先に解決する。Nodeの条件付きexport回帰testを追加し、browser単独は拒否する。
 
 ### 未解決事項・後続gate
 

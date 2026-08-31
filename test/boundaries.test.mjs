@@ -1,10 +1,32 @@
 import { readFileSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const sourceRoot = new URL("../src/", import.meta.url);
 const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
 describe("independent product boundaries", () => {
+  it.each(["server", "schema"])("resolves %s for workerd but not a browser", (entrypoint) => {
+    const script = `console.log(import.meta.resolve("@rizakura-hontai/daymark/${entrypoint}"))`;
+    const options = {
+      cwd: new URL("../", import.meta.url),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    };
+    const resolved = execFileSync(
+      process.execPath,
+      ["--conditions=workerd", "--conditions=browser", "--input-type=module", "-e", script],
+      options,
+    );
+    expect(resolved.trim()).toBe(new URL(`${entrypoint}.ts`, sourceRoot).href);
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        ["--conditions=browser", "--input-type=module", "-e", script],
+        options,
+      ),
+    ).toThrow(/ERR_PACKAGE_PATH_NOT_EXPORTED/);
+  });
   it("is private and exports only explicit entrypoints", () => {
     expect(manifest.private).toBe(true);
     expect(Object.keys(manifest.exports).sort()).toEqual([
