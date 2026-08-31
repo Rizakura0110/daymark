@@ -1,0 +1,15 @@
+.DS_Store
+*.log
+node_modules/
+dist/
+coverage/
+.tools/
+.pnpm-store/
+.cache/
+.config/
+.local/
+.tmp/
+.env
+.env.*
+.dev.vars
+.dev.vars.*

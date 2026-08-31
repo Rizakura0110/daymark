@@ -1,0 +1,39 @@
+{
+  "name": "@rizakura-hontai/daymark",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./browser": "./src/browser.ts",
+    "./contracts": "./src/contracts.ts",
+    "./server": {
+      "browser": null,
+      "default": "./src/server.ts"
+    },
+    "./schema": {
+      "browser": null,
+      "default": "./src/schema.ts"
+    }
+  },
+  "scripts": {
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "build": "tsc --project tsconfig.build.json",
+    "audit": "pnpm audit --audit-level high",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm build && pnpm audit"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "packageManager": "pnpm@11.22.0",
+  "devDependencies": {
+    "@biomejs/biome": "2.5.9",
+    "@vitest/coverage-v8": "4.1.11",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
+  }
+}
