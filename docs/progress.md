@@ -80,3 +80,20 @@
 
 - 認証済みHTTP client、HTML、manifest、icon、document routing、PWA metadata、統合E2Eは基盤repositoryのPhase 22で管理する。
 - production deploy・remote migration・Cloudflare resource変更は行っていない。Daymark backup・復元はPhase 23へ残す。
+
+## Phase 23: 製品別JSONバックアップ・復元
+
+### 実施内容
+
+- `product: "daymark"`とschema version 1を持つ専用形式へ、習慣、設定履歴、日次記録を参照整合付きで保存する契約を追加した。Tech InboxのJSONはDaymarkとして受け付けない。
+- 既存値を更新・削除しない復元計画を実装した。習慣IDの衝突は未使用IDへ割り当て直し、同じ日付の設定履歴・記録が同値なら一致、値が異なる場合は現在値を残してスキップする。
+- 同一backupの再投入は重複を作らない。previewと確定は同じ計画処理を使い、追加・一致・競合・ID再割り当て件数を返す。
+- 画面へ設定navigation、JSON download、4 MiB以下のlocal file検証、preview、明示確認、復元結果を追加した。認証情報やTech Inboxの記事は含めない旨を表示する。
+- backup件数上限を習慣200、設定履歴2,000、日次記録20,000とし、整合性違反またはpretty-print後4 MiB超過時は書き出しを明示的に停止する。黙った切り捨ては行わない。
+
+### 境界・検証
+
+- backupの形式・merge判断・UIはDaymark repositoryが所有し、HTTP認証、D1読書き、Content-Disposition、request body上限は基盤repositoryが担当する。
+- merge plan、ID衝突、同一fingerprintの複数習慣、競合skip、冪等性、不正参照、ID枯渇、export上限をunit testで検証した。8 files・64 testsがpassし、domain・契約・日付・backup処理のcoverageは全指標100%を維持した。
+- React設定画面はcomponent testと基盤側desktop/mobile E2Eで、download、file選択、preview、確認、復元完了を検証する。
+- production deploy、remote migration、Cloudflare resource・課金設定変更は行っていない。Phase 24の統合互換確認を次に行う。

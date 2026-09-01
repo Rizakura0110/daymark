@@ -191,3 +191,224 @@ export type DaymarkConnectionStatus = {
   readonly status: "ready";
   readonly timeZone: typeof DAYMARK_TIME_ZONE;
 };
+
+export const DAYMARK_BACKUP_PRODUCT = "daymark";
+export const DAYMARK_BACKUP_SCHEMA_VERSION = 1;
+export const MAX_DAYMARK_BACKUP_FILE_BYTES = 4 * 1_024 * 1_024;
+export const MAX_DAYMARK_BACKUP_IMPORT_BYTES = MAX_DAYMARK_BACKUP_FILE_BYTES + 1_024;
+export const DAYMARK_BACKUP_LIMITS = {
+  habits: 200,
+  habitVersions: 2_000,
+  records: 20_000,
+} as const;
+
+const utcDateTimeSchema = z.iso.datetime({ offset: false, local: false });
+const milliValueSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(DAYMARK_LIMITS.numericValue * 1_000);
+
+export const daymarkBackupHabitSchema = z.strictObject({
+  id: daymarkIdSchema,
+  name: habitNameSchema,
+  kind: habitKindSchema,
+  createdOn: daymarkDateSchema,
+  createdAt: utcDateTimeSchema,
+  updatedAt: utcDateTimeSchema,
+});
+export type DaymarkBackupHabit = z.output<typeof daymarkBackupHabitSchema>;
+
+export const daymarkBackupHabitVersionSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    id: daymarkIdSchema,
+    habitId: daymarkIdSchema,
+    effectiveFrom: daymarkDateSchema,
+    kind: z.literal("check"),
+    status: habitStatusSchema,
+    targetMilli: z.null(),
+    unit: z.null(),
+    comparison: z.null(),
+    createdAt: utcDateTimeSchema,
+    updatedAt: utcDateTimeSchema,
+  }),
+  z.strictObject({
+    id: daymarkIdSchema,
+    habitId: daymarkIdSchema,
+    effectiveFrom: daymarkDateSchema,
+    kind: z.literal("number"),
+    status: habitStatusSchema,
+    targetMilli: milliValueSchema,
+    unit: daymarkUnitSchema,
+    comparison: comparisonSchema,
+    createdAt: utcDateTimeSchema,
+    updatedAt: utcDateTimeSchema,
+  }),
+]);
+export type DaymarkBackupHabitVersion = z.output<typeof daymarkBackupHabitVersionSchema>;
+
+export const daymarkBackupRecordSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    id: daymarkIdSchema,
+    habitId: daymarkIdSchema,
+    recordDate: daymarkDateSchema,
+    kind: z.literal("check"),
+    checked: z.boolean(),
+    valueMilli: z.null(),
+    createdAt: utcDateTimeSchema,
+    updatedAt: utcDateTimeSchema,
+  }),
+  z.strictObject({
+    id: daymarkIdSchema,
+    habitId: daymarkIdSchema,
+    recordDate: daymarkDateSchema,
+    kind: z.literal("number"),
+    checked: z.null(),
+    valueMilli: milliValueSchema,
+    createdAt: utcDateTimeSchema,
+    updatedAt: utcDateTimeSchema,
+  }),
+]);
+export type DaymarkBackupRecord = z.output<typeof daymarkBackupRecordSchema>;
+
+function hasDuplicateValues(values: readonly string[]): boolean {
+  return new Set(values).size !== values.length;
+}
+
+export const daymarkBackupSnapshotSchema = z
+  .strictObject({
+    product: z.literal(DAYMARK_BACKUP_PRODUCT),
+    schemaVersion: z.literal(DAYMARK_BACKUP_SCHEMA_VERSION),
+    exportedAt: utcDateTimeSchema,
+    habits: z.array(daymarkBackupHabitSchema).max(DAYMARK_BACKUP_LIMITS.habits),
+    habitVersions: z
+      .array(daymarkBackupHabitVersionSchema)
+      .max(DAYMARK_BACKUP_LIMITS.habitVersions),
+    records: z.array(daymarkBackupRecordSchema).max(DAYMARK_BACKUP_LIMITS.records),
+  })
+  .superRefine((snapshot, context) => {
+    if (hasDuplicateValues(snapshot.habits.map(({ id }) => id))) {
+      context.addIssue({ code: "custom", message: "Habit IDs must be unique", path: ["habits"] });
+    }
+    if (hasDuplicateValues(snapshot.habitVersions.map(({ id }) => id))) {
+      context.addIssue({
+        code: "custom",
+        message: "Habit version IDs must be unique",
+        path: ["habitVersions"],
+      });
+    }
+    if (hasDuplicateValues(snapshot.records.map(({ id }) => id))) {
+      context.addIssue({ code: "custom", message: "Record IDs must be unique", path: ["records"] });
+    }
+    if (
+      hasDuplicateValues(
+        snapshot.habitVersions.map(
+          ({ habitId, effectiveFrom }) => `${habitId}\u0000${effectiveFrom}`,
+        ),
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Habit versions must be unique by habit and effective date",
+        path: ["habitVersions"],
+      });
+    }
+    if (
+      hasDuplicateValues(
+        snapshot.records.map(({ habitId, recordDate }) => `${habitId}\u0000${recordDate}`),
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Records must be unique by habit and date",
+        path: ["records"],
+      });
+    }
+
+    const habitsById = new Map(snapshot.habits.map((habit) => [habit.id, habit] as const));
+    const initialVersions = new Set<string>();
+    for (const version of snapshot.habitVersions) {
+      const habit = habitsById.get(version.habitId);
+      if (
+        habit === undefined ||
+        version.kind !== habit.kind ||
+        version.effectiveFrom < habit.createdOn
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Habit versions must reference a compatible exported habit",
+          path: ["habitVersions"],
+        });
+        continue;
+      }
+      if (version.effectiveFrom === habit.createdOn) initialVersions.add(habit.id);
+    }
+    for (const habit of snapshot.habits) {
+      if (!initialVersions.has(habit.id)) {
+        context.addIssue({
+          code: "custom",
+          message: "Each habit must include its initial configuration",
+          path: ["habitVersions"],
+        });
+      }
+    }
+    for (const record of snapshot.records) {
+      const habit = habitsById.get(record.habitId);
+      if (
+        habit === undefined ||
+        record.kind !== habit.kind ||
+        record.recordDate < habit.createdOn
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Records must reference a compatible exported habit",
+          path: ["records"],
+        });
+      }
+    }
+  });
+export type DaymarkBackupSnapshot = z.output<typeof daymarkBackupSnapshotSchema>;
+
+export const daymarkBackupImportRequestSchema = z.strictObject({
+  backup: daymarkBackupSnapshotSchema,
+});
+export type DaymarkBackupImportRequest = z.output<typeof daymarkBackupImportRequestSchema>;
+
+export const daymarkBackupImportSummarySchema = z.strictObject({
+  source: z.strictObject({
+    schemaVersion: z.literal(DAYMARK_BACKUP_SCHEMA_VERSION),
+    exportedAt: utcDateTimeSchema,
+    habits: z.number().int().nonnegative(),
+    habitVersions: z.number().int().nonnegative(),
+    records: z.number().int().nonnegative(),
+  }),
+  changes: z.strictObject({
+    habitsCreated: z.number().int().nonnegative(),
+    habitsMatched: z.number().int().nonnegative(),
+    habitIdsRemapped: z.number().int().nonnegative(),
+    habitVersionsCreated: z.number().int().nonnegative(),
+    habitVersionsMatched: z.number().int().nonnegative(),
+    habitVersionsSkipped: z.number().int().nonnegative(),
+    habitVersionIdsRemapped: z.number().int().nonnegative(),
+    recordsCreated: z.number().int().nonnegative(),
+    recordsMatched: z.number().int().nonnegative(),
+    recordsSkipped: z.number().int().nonnegative(),
+    recordIdsRemapped: z.number().int().nonnegative(),
+  }),
+  hasChanges: z.boolean(),
+});
+export type DaymarkBackupImportSummary = z.output<typeof daymarkBackupImportSummarySchema>;
+
+export const daymarkBackupImportPreviewResponseSchema = z.strictObject({
+  result: z.literal("preview"),
+  summary: daymarkBackupImportSummarySchema,
+});
+export type DaymarkBackupImportPreviewResponse = z.output<
+  typeof daymarkBackupImportPreviewResponseSchema
+>;
+
+export const daymarkBackupImportResponseSchema = z.strictObject({
+  result: z.literal("imported"),
+  summary: daymarkBackupImportSummarySchema,
+});
+export type DaymarkBackupImportResponse = z.output<typeof daymarkBackupImportResponseSchema>;

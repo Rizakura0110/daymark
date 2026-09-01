@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   createHabitRequestSchema,
+  daymarkBackupImportRequestSchema,
+  daymarkBackupSnapshotSchema,
   daymarkDateQuerySchema,
   daymarkMonthQuerySchema,
   daymarkNumericValueSchema,
@@ -8,6 +10,80 @@ import {
   putHabitRecordRequestSchema,
   weekResponseSchema,
 } from "../src/contracts.ts";
+
+const backupTimestamp = "2026-09-01T00:00:00.000Z";
+
+const backupFixture = () => ({
+  product: "daymark",
+  schemaVersion: 1,
+  exportedAt: backupTimestamp,
+  habits: [
+    {
+      id: "habit-check",
+      name: "水を飲む",
+      kind: "check",
+      createdOn: "2026-09-01",
+      createdAt: backupTimestamp,
+      updatedAt: backupTimestamp,
+    },
+    {
+      id: "habit-number",
+      name: "歩く",
+      kind: "number",
+      createdOn: "2026-09-01",
+      createdAt: backupTimestamp,
+      updatedAt: backupTimestamp,
+    },
+  ],
+  habitVersions: [
+    {
+      id: "version-check",
+      habitId: "habit-check",
+      effectiveFrom: "2026-09-01",
+      kind: "check",
+      status: "active",
+      targetMilli: null,
+      unit: null,
+      comparison: null,
+      createdAt: backupTimestamp,
+      updatedAt: backupTimestamp,
+    },
+    {
+      id: "version-number",
+      habitId: "habit-number",
+      effectiveFrom: "2026-09-01",
+      kind: "number",
+      status: "active",
+      targetMilli: 8_000_000,
+      unit: "歩",
+      comparison: "at_least",
+      createdAt: backupTimestamp,
+      updatedAt: backupTimestamp,
+    },
+  ],
+  records: [
+    {
+      id: "record-check",
+      habitId: "habit-check",
+      recordDate: "2026-09-01",
+      kind: "check",
+      checked: true,
+      valueMilli: null,
+      createdAt: backupTimestamp,
+      updatedAt: backupTimestamp,
+    },
+    {
+      id: "record-number",
+      habitId: "habit-number",
+      recordDate: "2026-09-01",
+      kind: "number",
+      checked: null,
+      valueMilli: 9_000_000,
+      createdAt: backupTimestamp,
+      updatedAt: backupTimestamp,
+    },
+  ],
+});
 
 describe("Daymark contracts", () => {
   it("normalizes check and numeric habit requests", () => {
@@ -182,5 +258,66 @@ describe("Daymark contracts", () => {
         },
       }).success,
     ).toBe(true);
+  });
+
+  it("validates a product-specific Daymark backup with referential integrity", () => {
+    const backup = backupFixture();
+    expect(daymarkBackupSnapshotSchema.parse(backup)).toEqual(backup);
+    expect(daymarkBackupImportRequestSchema.parse({ backup })).toEqual({ backup });
+    expect(
+      daymarkBackupSnapshotSchema.safeParse({ ...backup, product: "tech-inbox" }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    ["duplicate habit IDs", (backup) => backup.habits.push({ ...backup.habits[0] })],
+    [
+      "duplicate version IDs",
+      (backup) =>
+        backup.habitVersions.push({
+          ...backup.habitVersions[0],
+          habitId: "habit-number",
+          effectiveFrom: "2026-09-02",
+          kind: "number",
+          targetMilli: 1_000,
+          unit: "歩",
+          comparison: "at_least",
+        }),
+    ],
+    [
+      "duplicate record IDs",
+      (backup) =>
+        backup.records.push({
+          ...backup.records[0],
+          habitId: "habit-number",
+          recordDate: "2026-09-02",
+          kind: "number",
+          checked: null,
+          valueMilli: 1_000,
+        }),
+    ],
+    [
+      "duplicate habit version dates",
+      (backup) =>
+        backup.habitVersions.push({
+          ...backup.habitVersions[0],
+          id: "version-duplicate-date",
+        }),
+    ],
+    [
+      "duplicate record dates",
+      (backup) => backup.records.push({ ...backup.records[0], id: "record-duplicate-date" }),
+    ],
+    ["missing version habit", (backup) => (backup.habitVersions[0].habitId = "missing")],
+    ["mismatched version kind", (backup) => (backup.habitVersions[0].habitId = "habit-number")],
+    ["version before habit", (backup) => (backup.habitVersions[0].effectiveFrom = "2026-08-31")],
+    ["missing initial version", (backup) => (backup.habitVersions[0].effectiveFrom = "2026-09-02")],
+    ["missing record habit", (backup) => (backup.records[0].habitId = "missing")],
+    ["mismatched record kind", (backup) => (backup.records[0].habitId = "habit-number")],
+    ["record before habit", (backup) => (backup.records[0].recordDate = "2026-08-31")],
+  ])("rejects backup integrity failure: %s", (_label, mutate) => {
+    const backup = backupFixture();
+    mutate(backup);
+    expect(daymarkBackupSnapshotSchema.safeParse(backup).success).toBe(false);
   });
 });

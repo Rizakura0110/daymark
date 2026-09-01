@@ -84,7 +84,41 @@ const month: MonthResponse = {
 };
 
 function client(): DaymarkClient {
+  const backup = {
+    product: "daymark" as const,
+    schemaVersion: 1 as const,
+    exportedAt: timestamp,
+    habits: [],
+    habitVersions: [],
+    records: [],
+  };
+  const backupSummary = {
+    source: {
+      schemaVersion: 1 as const,
+      exportedAt: timestamp,
+      habits: 0,
+      habitVersions: 0,
+      records: 0,
+    },
+    changes: {
+      habitsCreated: 0,
+      habitsMatched: 0,
+      habitIdsRemapped: 0,
+      habitVersionsCreated: 0,
+      habitVersionsMatched: 0,
+      habitVersionsSkipped: 0,
+      habitVersionIdsRemapped: 0,
+      recordsCreated: 0,
+      recordsMatched: 0,
+      recordsSkipped: 0,
+      recordIdsRemapped: 0,
+    },
+    hasChanges: false,
+  };
   return {
+    exportBackup: vi.fn(async () => backup),
+    previewBackup: vi.fn(async () => ({ result: "preview", summary: backupSummary })),
+    importBackup: vi.fn(async () => ({ result: "imported", summary: backupSummary })),
     listHabits: vi.fn(async () => ({ habits: [checkHabit, numberHabit] })),
     createHabit: vi.fn(async () => checkHabit),
     renameHabit: vi.fn(async () => checkHabit),
@@ -97,7 +131,10 @@ function client(): DaymarkClient {
   };
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("Daymark application", () => {
   it("records daily check and numeric habits", async () => {
@@ -149,5 +186,43 @@ describe("Daymark application", () => {
     await waitFor(() =>
       expect(api.createHabit).toHaveBeenCalledWith({ name: "ストレッチ", kind: "check" }),
     );
+  });
+
+  it("downloads, previews, and restores a Daymark-only JSON backup", async () => {
+    const api = client();
+    const backup = await api.exportBackup();
+    const createObjectUrl = vi.fn(() => "blob:daymark-backup");
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectUrl });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    render(<DaymarkApp client={api} now={() => new Date("2026-08-31T15:00:00.000Z")} />);
+    await screen.findByRole("heading", { name: "水を飲む" });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "設定" })[0]);
+    expect(await screen.findByRole("heading", { name: "設定" })).toBeTruthy();
+    expect(await screen.findByText("JSONバックアップ")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "JSONを書き出す" }));
+    expect(createObjectUrl).toHaveBeenCalledOnce();
+
+    const file = new File([JSON.stringify(backup)], "daymark.json", {
+      type: "application/json",
+    });
+    Object.defineProperty(file, "text", {
+      configurable: true,
+      value: async () => JSON.stringify(backup),
+    });
+    fireEvent.change(screen.getByLabelText("Daymarkバックアップファイル（4MB以下）"), {
+      target: { files: [file] },
+    });
+    expect(await screen.findByText("選択済み: daymark.json")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "復元内容を確認" }));
+    expect(await screen.findByText("復元プレビュー")).toBeTruthy();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "安全に復元する" }));
+    expect(
+      await screen.findByText("すべて既存データと一致していたため、変更はありませんでした。"),
+    ).toBeTruthy();
+    expect(api.previewBackup).toHaveBeenCalledWith(backup);
+    expect(api.importBackup).toHaveBeenCalledWith(backup);
   });
 });

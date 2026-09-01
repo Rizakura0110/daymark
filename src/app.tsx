@@ -1,4 +1,5 @@
 import {
+  type ChangeEvent,
   type ComponentProps,
   type FormEvent,
   type ReactNode,
@@ -8,16 +9,20 @@ import {
   useRef,
   useState,
 } from "react";
-import type {
-  CreateHabitRequest,
-  DailyHabitDto,
-  DayResponse,
-  HabitDto,
-  ListHabitsResponse,
-  MonthResponse,
-  PutHabitConfigurationRequest,
-  PutHabitRecordRequest,
-  WeekResponse,
+import {
+  type CreateHabitRequest,
+  type DailyHabitDto,
+  type DaymarkBackupImportSummary,
+  type DaymarkBackupSnapshot,
+  type DayResponse,
+  daymarkBackupSnapshotSchema,
+  type HabitDto,
+  type ListHabitsResponse,
+  MAX_DAYMARK_BACKUP_FILE_BYTES,
+  type MonthResponse,
+  type PutHabitConfigurationRequest,
+  type PutHabitRecordRequest,
+  type WeekResponse,
 } from "./contracts.js";
 import {
   addCalendarDays,
@@ -30,6 +35,15 @@ import {
 } from "./browser-date.js";
 
 export type DaymarkClient = {
+  readonly exportBackup: (signal?: AbortSignal) => Promise<DaymarkBackupSnapshot>;
+  readonly previewBackup: (
+    backup: DaymarkBackupSnapshot,
+    signal?: AbortSignal,
+  ) => Promise<{ readonly result: "preview"; readonly summary: DaymarkBackupImportSummary }>;
+  readonly importBackup: (
+    backup: DaymarkBackupSnapshot,
+    signal?: AbortSignal,
+  ) => Promise<{ readonly result: "imported"; readonly summary: DaymarkBackupImportSummary }>;
   readonly listHabits: (signal?: AbortSignal) => Promise<ListHabitsResponse>;
   readonly createHabit: (request: CreateHabitRequest, signal?: AbortSignal) => Promise<HabitDto>;
   readonly renameHabit: (id: string, name: string, signal?: AbortSignal) => Promise<HabitDto>;
@@ -51,7 +65,7 @@ export type DaymarkClient = {
   readonly getMonth: (month: string, signal?: AbortSignal) => Promise<MonthResponse>;
 };
 
-type Section = "today" | "history" | "habits";
+type Section = "today" | "history" | "habits" | "settings";
 type HistoryPeriod = "week" | "month";
 
 type DaymarkAppProps = {
@@ -1323,6 +1337,296 @@ function HabitManagementView({
   );
 }
 
+const backupCountRows: readonly [keyof DaymarkBackupImportSummary["changes"], string][] = [
+  ["habitsCreated", "追加する習慣"],
+  ["habitsMatched", "既存と一致した習慣"],
+  ["habitIdsRemapped", "割り当て直す習慣ID"],
+  ["habitVersionsCreated", "追加する設定履歴"],
+  ["habitVersionsMatched", "既存と一致した設定履歴"],
+  ["habitVersionsSkipped", "競合でスキップする設定履歴"],
+  ["habitVersionIdsRemapped", "割り当て直す設定履歴ID"],
+  ["recordsCreated", "追加する日次記録"],
+  ["recordsMatched", "既存と一致した日次記録"],
+  ["recordsSkipped", "競合でスキップする日次記録"],
+  ["recordIdsRemapped", "割り当て直す日次記録ID"],
+];
+
+function downloadBackup(data: DaymarkBackupSnapshot): void {
+  const blob = new Blob([`${JSON.stringify(data, null, 2)}\n`], {
+    type: "application/json;charset=utf-8",
+  });
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = `daymark-export-${data.exportedAt.slice(0, 10)}.json`;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+}
+
+function BackupSettingsView({
+  client,
+  onImported,
+}: {
+  readonly client: DaymarkClient;
+  readonly onImported: () => void;
+}) {
+  const fileInputId = useId();
+  const [data, setData] = useState<DaymarkBackupSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  const [backup, setBackup] = useState<DaymarkBackupSnapshot | null>(null);
+  const [fileName, setFileName] = useState("");
+  const [summary, setSummary] = useState<DaymarkBackupImportSummary | null>(null);
+  const [applied, setApplied] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState<"preview" | "apply" | null>(null);
+  const [importError, setImportError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void refresh;
+    setLoading(true);
+    setLoadError("");
+    client
+      .exportBackup(controller.signal)
+      .then((response) => {
+        if (!controller.signal.aborted) setData(response);
+      })
+      .catch((error: unknown) => {
+        const message = errorMessage(error);
+        if (message !== "") setLoadError(message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [client, refresh]);
+
+  async function chooseFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    setBackup(null);
+    setFileName(file?.name ?? "");
+    setSummary(null);
+    setApplied(false);
+    setConfirmed(false);
+    setImportError("");
+    setSuccess("");
+    if (file === undefined) return;
+    if (file.size > MAX_DAYMARK_BACKUP_FILE_BYTES) {
+      setImportError("バックアップファイルは4MB以下にしてください。");
+      return;
+    }
+    try {
+      const parsed: unknown = JSON.parse(await file.text());
+      const validated = daymarkBackupSnapshotSchema.safeParse(parsed);
+      if (!validated.success) {
+        setImportError("Daymarkから書き出した有効なJSONバックアップを選択してください。");
+        return;
+      }
+      setBackup(validated.data);
+    } catch {
+      setImportError("JSONファイルを読み込めませんでした。");
+    }
+  }
+
+  async function preview() {
+    if (backup === null) return;
+    setBusy("preview");
+    setImportError("");
+    setSuccess("");
+    setSummary(null);
+    setApplied(false);
+    setConfirmed(false);
+    try {
+      setSummary((await client.previewBackup(backup)).summary);
+    } catch (error) {
+      setImportError(errorMessage(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function apply() {
+    if (backup === null || summary === null || !confirmed) return;
+    setBusy("apply");
+    setImportError("");
+    setSuccess("");
+    try {
+      const response = await client.importBackup(backup);
+      setSummary(response.summary);
+      setApplied(true);
+      setConfirmed(false);
+      setSuccess(
+        response.summary.hasChanges
+          ? "Daymarkバックアップを安全に復元しました。"
+          : "すべて既存データと一致していたため、変更はありませんでした。",
+      );
+      setRefresh((value) => value + 1);
+      onImported();
+    } catch (error) {
+      setImportError(errorMessage(error));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section>
+      <header>
+        <p className="text-sm text-slate-500">記録データを手元に残す</p>
+        <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-950">設定</h1>
+      </header>
+      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <h2 className="text-base font-semibold text-slate-900">JSONバックアップ</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          習慣、設定履歴、日次記録をDaymark専用のJSONファイルへ書き出します。
+        </p>
+        {loading ? (
+          <p className="mt-5 text-sm text-slate-600" role="status">
+            件数を確認しています…
+          </p>
+        ) : null}
+        {loadError !== "" ? (
+          <div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-4" role="alert">
+            <p className="text-sm text-red-800">{loadError}</p>
+            <button
+              className="mt-3 min-h-11 rounded-lg border border-red-300 bg-white px-4 text-sm font-semibold text-red-800"
+              onClick={() => setRefresh((value) => value + 1)}
+              type="button"
+            >
+              再読み込み
+            </button>
+          </div>
+        ) : null}
+        {data !== null && !loading ? (
+          <>
+            <dl className="mt-5 divide-y divide-slate-100 text-sm">
+              {(
+                [
+                  ["習慣", data.habits.length],
+                  ["設定履歴", data.habitVersions.length],
+                  ["日次記録", data.records.length],
+                ] as const
+              ).map(([label, count]) => (
+                <div className="flex items-center justify-between gap-4 py-3" key={label}>
+                  <dt className="text-slate-600">{label}</dt>
+                  <dd className="font-semibold tabular-nums text-slate-900">{count}件</dd>
+                </div>
+              ))}
+            </dl>
+            <button
+              className="mt-5 inline-flex min-h-11 items-center justify-center rounded-lg bg-blue-600 px-5 text-sm font-semibold text-white hover:bg-blue-700"
+              onClick={() => downloadBackup(data)}
+              type="button"
+            >
+              JSONを書き出す
+            </button>
+            <p className="mt-3 text-xs leading-5 text-slate-500">
+              認証情報やTech Inboxの記事は含まれません。ファイルは非公開の場所に保存してください。
+            </p>
+          </>
+        ) : null}
+      </div>
+
+      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <h2 className="text-base font-semibold text-slate-900">JSONバックアップから復元</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          現在のデータは上書きせず、不足している習慣・設定履歴・日次記録だけを追加します。
+        </p>
+        <label className="mt-5 block text-sm font-semibold text-slate-800" htmlFor={fileInputId}>
+          Daymarkバックアップファイル（4MB以下）
+        </label>
+        <input
+          accept="application/json,.json"
+          className="mt-2 block min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:font-semibold file:text-slate-800"
+          disabled={busy !== null}
+          id={fileInputId}
+          onChange={(event) => void chooseFile(event)}
+          type="file"
+        />
+        {backup !== null ? (
+          <p className="mt-2 text-xs text-slate-600">選択済み: {fileName}</p>
+        ) : null}
+        <button
+          className="mt-4 inline-flex min-h-11 items-center justify-center rounded-lg border border-blue-700 bg-white px-5 text-sm font-semibold text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={backup === null || busy !== null}
+          onClick={() => void preview()}
+          type="button"
+        >
+          {busy === "preview" ? "確認しています…" : "復元内容を確認"}
+        </button>
+        {importError !== "" ? (
+          <p
+            className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800"
+            role="alert"
+          >
+            {importError}
+          </p>
+        ) : null}
+        {success !== "" ? (
+          <p
+            className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"
+            role="status"
+          >
+            {success}
+          </p>
+        ) : null}
+        {summary !== null ? (
+          <div className="mt-5 rounded-lg border border-slate-200 p-4">
+            <h3 className="text-sm font-semibold text-slate-900">
+              {applied ? "復元結果" : "復元プレビュー"}
+            </h3>
+            <p className="mt-2 text-xs leading-5 text-slate-600">
+              schema v{summary.source.schemaVersion}・{summary.source.habits}習慣・
+              {summary.source.habitVersions}設定履歴・{summary.source.records}
+              日次記録のバックアップです。
+            </p>
+            <dl className="mt-3 divide-y divide-slate-100 text-sm">
+              {backupCountRows.map(([key, label]) => (
+                <div className="flex items-center justify-between gap-4 py-2" key={key}>
+                  <dt className="text-slate-600">{label}</dt>
+                  <dd className="font-semibold tabular-nums text-slate-900">
+                    {summary.changes[key]}件
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            <p className="mt-3 text-xs leading-5 text-slate-500">
+              競合した設定値・記録値は現在のデータを残し、Tech Inboxのデータは変更しません。
+            </p>
+            {!applied ? (
+              <>
+                <label className="mt-4 flex min-h-11 items-start gap-3 text-sm leading-6 text-slate-700">
+                  <input
+                    checked={confirmed}
+                    className="mt-1 h-5 w-5 rounded border-slate-300"
+                    disabled={busy !== null}
+                    onChange={(event) => setConfirmed(event.currentTarget.checked)}
+                    type="checkbox"
+                  />
+                  既存データを上書きしないマージ内容を確認しました
+                </label>
+                <button
+                  className="mt-3 inline-flex min-h-11 items-center justify-center rounded-lg bg-blue-600 px-5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!confirmed || busy !== null}
+                  onClick={() => void apply()}
+                  type="button"
+                >
+                  {busy === "apply" ? "復元しています…" : "安全に復元する"}
+                </button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function Navigation({
   section,
   mobile = false,
@@ -1336,6 +1640,7 @@ function Navigation({
     { value: "today", label: "今日", glyph: "✓" },
     { value: "history", label: "履歴", glyph: "▦" },
     { value: "habits", label: "習慣管理", glyph: "☷" },
+    { value: "settings", label: "設定", glyph: "⚙" },
   ] as const;
   return items.map((item) => (
     <button
@@ -1616,6 +1921,16 @@ export function DaymarkApp({ client, now = defaultNow, portalHref = "/" }: Dayma
               onAdd={() => setAddingHabit(true)}
               onEdit={setEditingHabit}
               onRetry={() => setRefreshHabits((value) => value + 1)}
+            />
+          ) : null}
+          {section === "settings" ? (
+            <BackupSettingsView
+              client={client}
+              onImported={() => {
+                setRefreshDay((value) => value + 1);
+                setRefreshHabits((value) => value + 1);
+                setRefreshHistory((value) => value + 1);
+              }}
             />
           ) : null}
         </main>

@@ -1,7 +1,14 @@
 import {
   type CreateHabitRequest,
+  DAYMARK_BACKUP_PRODUCT,
+  DAYMARK_BACKUP_SCHEMA_VERSION,
   DAYMARK_PRODUCT,
   DAYMARK_TIME_ZONE,
+  type DaymarkBackupImportPreviewResponse,
+  type DaymarkBackupImportRequest,
+  type DaymarkBackupImportResponse,
+  type DaymarkBackupImportSummary,
+  type DaymarkBackupSnapshot,
   type DailyHabitDto,
   type DayResponse,
   type DaySummaryDto,
@@ -16,6 +23,8 @@ import {
   type PutHabitRecordRequest,
   type RenameHabitRequest,
   type WeekResponse,
+  daymarkBackupSnapshotSchema,
+  MAX_DAYMARK_BACKUP_FILE_BYTES,
 } from "./contracts.js";
 
 const JST_OFFSET_MILLISECONDS = 9 * 60 * 60 * 1_000;
@@ -66,6 +75,24 @@ export interface DaymarkRepository {
   upsertVersion(version: HabitVersionEntity): Promise<boolean>;
   upsertRecord(record: HabitRecordEntity): Promise<boolean>;
   deleteRecord(habitId: string, recordDate: string): Promise<boolean>;
+}
+
+export type DaymarkSnapshot = {
+  readonly habits: readonly HabitEntity[];
+  readonly habitVersions: readonly HabitVersionEntity[];
+  readonly records: readonly HabitRecordEntity[];
+};
+
+export type DaymarkBackupImportPlan = {
+  readonly habits: readonly HabitEntity[];
+  readonly habitVersions: readonly HabitVersionEntity[];
+  readonly records: readonly HabitRecordEntity[];
+  readonly summary: DaymarkBackupImportSummary;
+};
+
+export interface DaymarkBackupRepository {
+  loadSnapshot(): Promise<DaymarkSnapshot>;
+  apply(plan: DaymarkBackupImportPlan): Promise<void>;
 }
 
 export type DaymarkErrorCode = "VALIDATION_ERROR" | "NOT_FOUND" | "CONFLICT";
@@ -526,5 +553,250 @@ export class DaymarkService {
         perfectDays: days.filter((day) => day.due > 0 && day.complete === day.due).length,
       },
     };
+  }
+}
+
+type BackupIdGenerator = () => string;
+
+function allocateBackupId(
+  preferred: string,
+  occupied: Set<string>,
+  idGenerator: BackupIdGenerator,
+): string {
+  if (!occupied.has(preferred)) {
+    occupied.add(preferred);
+    return preferred;
+  }
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const candidate = idGenerator();
+    if (!occupied.has(candidate)) {
+      occupied.add(candidate);
+      return candidate;
+    }
+  }
+  throw new Error("Could not allocate a unique Daymark backup import ID.");
+}
+
+function sameHabitIdentity(left: HabitEntity, right: HabitEntity): boolean {
+  return left.kind === right.kind && left.createdOn === right.createdOn;
+}
+
+function sameHabitFingerprint(left: HabitEntity, right: HabitEntity): boolean {
+  return (
+    left.name === right.name &&
+    sameHabitIdentity(left, right) &&
+    left.createdAt === right.createdAt &&
+    left.updatedAt === right.updatedAt
+  );
+}
+
+function sameVersionValue(left: HabitVersionEntity, right: HabitVersionEntity): boolean {
+  return (
+    left.kind === right.kind &&
+    left.status === right.status &&
+    left.targetMilli === right.targetMilli &&
+    left.unit === right.unit &&
+    left.comparison === right.comparison
+  );
+}
+
+function sameRecordValue(left: HabitRecordEntity, right: HabitRecordEntity): boolean {
+  return (
+    left.kind === right.kind &&
+    left.checked === right.checked &&
+    left.valueMilli === right.valueMilli
+  );
+}
+
+function backupSourceSummary(backup: DaymarkBackupSnapshot): DaymarkBackupImportSummary["source"] {
+  return {
+    schemaVersion: backup.schemaVersion,
+    exportedAt: backup.exportedAt,
+    habits: backup.habits.length,
+    habitVersions: backup.habitVersions.length,
+    records: backup.records.length,
+  };
+}
+
+export function buildDaymarkBackupImportPlan(
+  current: DaymarkSnapshot,
+  backup: DaymarkBackupSnapshot,
+  idGenerator: BackupIdGenerator,
+): DaymarkBackupImportPlan {
+  const changes: DaymarkBackupImportSummary["changes"] = {
+    habitsCreated: 0,
+    habitsMatched: 0,
+    habitIdsRemapped: 0,
+    habitVersionsCreated: 0,
+    habitVersionsMatched: 0,
+    habitVersionsSkipped: 0,
+    habitVersionIdsRemapped: 0,
+    recordsCreated: 0,
+    recordsMatched: 0,
+    recordsSkipped: 0,
+    recordIdsRemapped: 0,
+  };
+  const newHabits: HabitEntity[] = [];
+  const newVersions: HabitVersionEntity[] = [];
+  const newRecords: HabitRecordEntity[] = [];
+  const habitIdMap = new Map<string, string>();
+  const occupiedHabitIds = new Set(current.habits.map(({ id }) => id));
+  const occupiedVersionIds = new Set(current.habitVersions.map(({ id }) => id));
+  const occupiedRecordIds = new Set(current.records.map(({ id }) => id));
+  const habitsById = new Map(current.habits.map((habit) => [habit.id, habit] as const));
+  const matchedHabitIds = new Set<string>();
+  const sortedBackupHabits = [...backup.habits].sort((left, right) =>
+    left.id.localeCompare(right.id),
+  );
+
+  for (const source of sortedBackupHabits) {
+    const sameId = habitsById.get(source.id);
+    if (sameId !== undefined && sameHabitIdentity(sameId, source)) {
+      habitIdMap.set(source.id, sameId.id);
+      matchedHabitIds.add(sameId.id);
+      changes.habitsMatched += 1;
+    }
+  }
+
+  for (const source of sortedBackupHabits) {
+    if (habitIdMap.has(source.id)) continue;
+    const fingerprintMatches = current.habits.filter(
+      (habit) => !matchedHabitIds.has(habit.id) && sameHabitFingerprint(habit, source),
+    );
+    if (fingerprintMatches.length === 1) {
+      const match = fingerprintMatches[0] as HabitEntity;
+      habitIdMap.set(source.id, match.id);
+      matchedHabitIds.add(match.id);
+      changes.habitsMatched += 1;
+      continue;
+    }
+    const id = allocateBackupId(source.id, occupiedHabitIds, idGenerator);
+    if (id !== source.id) changes.habitIdsRemapped += 1;
+    newHabits.push({ ...source, id });
+    habitIdMap.set(source.id, id);
+    changes.habitsCreated += 1;
+  }
+
+  const versionsByNaturalKey = new Map<string, HabitVersionEntity>(
+    current.habitVersions.map(
+      (version) => [`${version.habitId}\u0000${version.effectiveFrom}`, version] as const,
+    ),
+  );
+  for (const source of [...backup.habitVersions].sort((left, right) =>
+    `${left.habitId}\u0000${left.effectiveFrom}`.localeCompare(
+      `${right.habitId}\u0000${right.effectiveFrom}`,
+    ),
+  )) {
+    const habitId = habitIdMap.get(source.habitId);
+    if (habitId === undefined) throw new Error("Validated version references a missing habit.");
+    const target = { ...source, habitId };
+    const naturalKey = `${habitId}\u0000${source.effectiveFrom}`;
+    const existing = versionsByNaturalKey.get(naturalKey);
+    if (existing !== undefined) {
+      if (sameVersionValue(existing, target)) changes.habitVersionsMatched += 1;
+      else changes.habitVersionsSkipped += 1;
+      continue;
+    }
+    const id = allocateBackupId(source.id, occupiedVersionIds, idGenerator);
+    if (id !== source.id) changes.habitVersionIdsRemapped += 1;
+    const version = { ...target, id };
+    newVersions.push(version);
+    versionsByNaturalKey.set(naturalKey, version);
+    changes.habitVersionsCreated += 1;
+  }
+
+  const recordsByNaturalKey = new Map<string, HabitRecordEntity>(
+    current.records.map(
+      (record) => [`${record.habitId}\u0000${record.recordDate}`, record] as const,
+    ),
+  );
+  for (const source of [...backup.records].sort((left, right) =>
+    `${left.habitId}\u0000${left.recordDate}`.localeCompare(
+      `${right.habitId}\u0000${right.recordDate}`,
+    ),
+  )) {
+    const habitId = habitIdMap.get(source.habitId);
+    if (habitId === undefined) throw new Error("Validated record references a missing habit.");
+    const target = { ...source, habitId };
+    const naturalKey = `${habitId}\u0000${source.recordDate}`;
+    const existing = recordsByNaturalKey.get(naturalKey);
+    if (existing !== undefined) {
+      if (sameRecordValue(existing, target)) changes.recordsMatched += 1;
+      else changes.recordsSkipped += 1;
+      continue;
+    }
+    const id = allocateBackupId(source.id, occupiedRecordIds, idGenerator);
+    if (id !== source.id) changes.recordIdsRemapped += 1;
+    const record = { ...target, id };
+    newRecords.push(record);
+    recordsByNaturalKey.set(naturalKey, record);
+    changes.recordsCreated += 1;
+  }
+
+  return {
+    habits: newHabits,
+    habitVersions: newVersions,
+    records: newRecords,
+    summary: {
+      source: backupSourceSummary(backup),
+      changes,
+      hasChanges:
+        changes.habitsCreated > 0 || changes.habitVersionsCreated > 0 || changes.recordsCreated > 0,
+    },
+  };
+}
+
+export class DaymarkBackupService {
+  readonly #repository: DaymarkBackupRepository;
+  readonly #clock: DaymarkClock;
+  readonly #idGenerator: DaymarkIdGenerator;
+
+  constructor(
+    repository: DaymarkBackupRepository,
+    clock: DaymarkClock,
+    idGenerator: DaymarkIdGenerator,
+  ) {
+    this.#repository = repository;
+    this.#clock = clock;
+    this.#idGenerator = idGenerator;
+  }
+
+  async exportAll(): Promise<DaymarkBackupSnapshot> {
+    const current = await this.#repository.loadSnapshot();
+    const parsed = daymarkBackupSnapshotSchema.safeParse({
+      product: DAYMARK_BACKUP_PRODUCT,
+      schemaVersion: DAYMARK_BACKUP_SCHEMA_VERSION,
+      exportedAt: this.#clock().toISOString(),
+      ...current,
+    });
+    if (!parsed.success) {
+      throw new DaymarkError(
+        "CONFLICT",
+        "現在のDaymarkデータはバックアップ上限または整合性条件を満たしていません。",
+      );
+    }
+    const downloadBytes = new TextEncoder().encode(
+      `${JSON.stringify(parsed.data, null, 2)}\n`,
+    ).byteLength;
+    if (downloadBytes > MAX_DAYMARK_BACKUP_FILE_BYTES) {
+      throw new DaymarkError(
+        "CONFLICT",
+        "Daymarkバックアップが4MBを超えるため書き出せません。記録件数を確認してください。",
+      );
+    }
+    return parsed.data;
+  }
+
+  async preview(request: DaymarkBackupImportRequest): Promise<DaymarkBackupImportPreviewResponse> {
+    const current = await this.#repository.loadSnapshot();
+    const plan = buildDaymarkBackupImportPlan(current, request.backup, this.#idGenerator);
+    return { result: "preview", summary: plan.summary };
+  }
+
+  async apply(request: DaymarkBackupImportRequest): Promise<DaymarkBackupImportResponse> {
+    const current = await this.#repository.loadSnapshot();
+    const plan = buildDaymarkBackupImportPlan(current, request.backup, this.#idGenerator);
+    await this.#repository.apply(plan);
+    return { result: "imported", summary: plan.summary };
   }
 }
