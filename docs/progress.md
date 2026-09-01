@@ -27,3 +27,33 @@
 
 - 基盤側の固定commit取得・browser build境界・認証・実HTTP・既存記事を含む統合検証は基盤のPhase 20記録で管理する。
 - 習慣機能・UIはPhase 21冒頭で所有者と設計する。本番deploy・remote DB操作は行っていない。
+
+## Phase 21: 習慣のデータ・API基盤
+
+### 合意仕様
+
+- 1日単位の習慣だけを扱い、チェック式と数値式を用意する。数値は0〜10億、小数3桁まで、単位と「以上/以下」の達成条件を持つ。
+- 日付境界は日本時間。今日と過去の記録を作成・修正・削除でき、未来は拒否する。未入力と明示的な未達を区別する。
+- 状態は有効・休止・アーカイブ。休止・アーカイブ中と未来日は達成率の分母から除く。
+- 目標・単位・比較条件・状態の変更は今日以降の適用日を持つversionとして保存し、過去の評価を変えない。習慣の種類は変更しない。
+- 週は月曜〜日曜の日別・習慣別集計、月は各日の達成集計を返す。週途中で作成した習慣は作成日以降だけを対象にする。
+
+### 実施内容
+
+- Zodによるcreate/rename/configuration/record/day/week/month契約と安全な上限を追加した。
+- clock、ID生成、repositoryを注入するdomain serviceへ、JST日付、3桁固定小数の整数保存、達成判定、履歴解決、日/週/月集計を実装した。
+- `daymark_habits`、`daymark_habit_versions`、`daymark_records`のDrizzle schema、CHECK/UNIQUE/index/cascadeを定義した。migration履歴は基盤repositoryだけが所有する。
+- unit testで契約、schema、日付境界、設定履歴、チェック/数値判定、休止、未来拒否、週/月集計、異常データを検証した。
+
+### 境界と後続
+
+- 認証、HTTP handler、D1 adapter、migration、実D1・実HTTP検証は基盤側Phase 21で管理する。
+- browser entrypointは引き続き準備中表示だけとし、画面・PWAはPhase 22、製品別backupはPhase 23へ分けた。
+- production deploy、remote migration、Cloudflare resource・課金設定の変更は行っていない。
+
+### 検証結果
+
+- format、lint、TypeScript、宣言付きbuildが成功した。
+- 5 files・38 testsがpassし、coverageはstatements/branches/functions/linesすべて100%。
+- `pnpm audit --audit-level high`は既知脆弱性0件。
+- schemaの数値上限とcheck recordのNULL境界は、基盤の実local D1 gateでも検証する。

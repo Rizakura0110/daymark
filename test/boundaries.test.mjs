@@ -37,7 +37,10 @@ describe("independent product boundaries", () => {
     ]);
     expect(manifest.exports["./server"].browser).toBeNull();
     expect(manifest.exports["./schema"].browser).toBeNull();
-    expect(manifest.dependencies).toBeUndefined();
+    expect(manifest.dependencies).toEqual({
+      "drizzle-orm": "0.45.2",
+      zod: "4.4.3",
+    });
   });
   it("does not import application internals or perform side effects", () => {
     for (const file of readdirSync(sourceRoot)) {
@@ -48,7 +51,21 @@ describe("independent product boundaries", () => {
       const imports = [...source.matchAll(/\b(?:from\s*|import\s*)["']([^"']+)["']/g)].map(
         (match) => match[1],
       );
-      expect(imports).toEqual(file === "server.ts" ? ["./contracts.js"] : []);
+      const allowedImports = {
+        "browser.ts": [],
+        "contracts.ts": ["zod"],
+        "schema.ts": [
+          "drizzle-orm/sql",
+          "drizzle-orm/sqlite-core/checks",
+          "drizzle-orm/sqlite-core/columns/integer",
+          "drizzle-orm/sqlite-core/columns/text",
+          "drizzle-orm/sqlite-core/indexes",
+          "drizzle-orm/sqlite-core/table",
+          "./contracts.js",
+        ],
+        "server.ts": ["./contracts.js"],
+      };
+      expect(imports).toEqual(allowedImports[file]);
     }
   });
 });

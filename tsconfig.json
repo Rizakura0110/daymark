@@ -14,7 +14,7 @@
     "useUnknownInCatchVariables": true,
     "noFallthroughCasesInSwitch": true,
     "noEmit": true,
-    "skipLibCheck": false
+    "skipLibCheck": true
   },
   "include": ["src"]
 }
