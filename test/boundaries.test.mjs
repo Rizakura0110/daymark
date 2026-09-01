@@ -30,6 +30,7 @@ describe("independent product boundaries", () => {
   it("is private and exports only explicit entrypoints", () => {
     expect(manifest.private).toBe(true);
     expect(Object.keys(manifest.exports).sort()).toEqual([
+      "./app",
       "./browser",
       "./contracts",
       "./schema",
@@ -52,6 +53,8 @@ describe("independent product boundaries", () => {
         (match) => match[1],
       );
       const allowedImports = {
+        "app.tsx": ["react", "./contracts.js", "./browser-date.js"],
+        "browser-date.ts": [],
         "browser.ts": [],
         "contracts.ts": ["zod"],
         "schema.ts": [

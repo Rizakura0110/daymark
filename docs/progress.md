@@ -57,3 +57,26 @@
 - 5 files・38 testsがpassし、coverageはstatements/branches/functions/linesすべて100%。
 - `pnpm audit --audit-level high`は既知脆弱性0件。
 - schemaの数値上限とcheck recordのNULL境界は、基盤の実local D1 gateでも検証する。
+
+## Phase 22: 日・週・月画面と習慣管理UI
+
+### 実施内容
+
+- 基盤から注入する`DaymarkClient`だけを使うReact画面を`app` entrypointとして追加した。Cloudflare、認証、D1、Tech Inboxのsourceは参照しない。
+- 日本時間の今日を基準に、日次のチェック・数値入力、過去日移動、記録削除、達成率を表示する。
+- 月曜始まりの週tableと、暦月の各日を達成率で表示する月カレンダーを追加した。
+- チェック式・数値式の習慣追加、名称・目標・単位・達成条件・有効/休止/アーカイブ変更をdialogで操作できる。
+- desktop固定sidebarとmobile bottom navigationを持つresponsive構成にし、入口へ戻る通常linkを用意した。
+- browser entrypointは準備中定数から、入口で使う製品名・説明へ変更した。
+
+### 境界・検証
+
+- `app`をbrowser build許可entrypointへ追加し、`server`・`schema`がclientへ混入しないVite境界を維持した。
+- 日付helperと画面component testを追加し、7 files・43 testsがpassした。domain・契約・日付処理のcoverageはstatements/branches/functions/linesすべて100%。React画面はcomponent testと基盤側desktop/mobile E2Eで検証する。
+- format、lint、TypeScript、宣言付きbuildがpassし、依存監査は既知脆弱性0件だった。
+- Reactは基盤と同じ19.2.8をpeerにし、単体test用依存も既存baselineの完全versionへ揃えた。
+
+### 基盤側・次フェーズ
+
+- 認証済みHTTP client、HTML、manifest、icon、document routing、PWA metadata、統合E2Eは基盤repositoryのPhase 22で管理する。
+- production deploy・remote migration・Cloudflare resource変更は行っていない。Daymark backup・復元はPhase 23へ残す。
