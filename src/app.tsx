@@ -1537,6 +1537,9 @@ function BackupSettingsView({
         <p className="mt-2 text-sm leading-6 text-slate-600">
           現在のデータは上書きせず、不足している習慣・設定履歴・日次記録だけを追加します。
         </p>
+        <p className="mt-2 text-xs leading-5 text-slate-500">
+          大きなバックアップは安全な件数へ分けて処理します。途中で失敗した場合も、同じファイルを再度選べば一致済みのデータを重複させず再開できます。
+        </p>
         <label className="mt-5 block text-sm font-semibold text-slate-800" htmlFor={fileInputId}>
           Daymarkバックアップファイル（4MB以下）
         </label>

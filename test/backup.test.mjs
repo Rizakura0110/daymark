@@ -269,6 +269,8 @@ describe("DaymarkBackupService", () => {
         records: [record()],
       }),
     );
+    expect(repository.loadSnapshot).toHaveBeenNthCalledWith(2, backup());
+    expect(repository.loadSnapshot).toHaveBeenNthCalledWith(3, backup());
   });
 
   it("stops exports that are structurally invalid or larger than the importable file limit", async () => {

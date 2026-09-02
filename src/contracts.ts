@@ -13,6 +13,7 @@ export const DAYMARK_LIMITS = {
   numericValue: 1_000_000_000,
   decimalPlaces: 3,
 } as const;
+export const DAYMARK_BACKUP_IMPORT_RECORD_BATCH_SIZE = 400;
 
 const scaledInteger = (value: number) => Number.isInteger(value * 1_000);
 
@@ -370,7 +371,13 @@ export const daymarkBackupSnapshotSchema = z
 export type DaymarkBackupSnapshot = z.output<typeof daymarkBackupSnapshotSchema>;
 
 export const daymarkBackupImportRequestSchema = z.strictObject({
-  backup: daymarkBackupSnapshotSchema,
+  backup: daymarkBackupSnapshotSchema.refine(
+    ({ records }) => records.length <= DAYMARK_BACKUP_IMPORT_RECORD_BATCH_SIZE,
+    {
+      message: `A restore request can contain at most ${DAYMARK_BACKUP_IMPORT_RECORD_BATCH_SIZE} records`,
+      path: ["records"],
+    },
+  ),
 });
 export type DaymarkBackupImportRequest = z.output<typeof daymarkBackupImportRequestSchema>;
 

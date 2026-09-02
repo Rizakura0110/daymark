@@ -91,7 +91,7 @@ export type DaymarkBackupImportPlan = {
 };
 
 export interface DaymarkBackupRepository {
-  loadSnapshot(): Promise<DaymarkSnapshot>;
+  loadSnapshot(scope?: DaymarkBackupSnapshot): Promise<DaymarkSnapshot>;
   apply(plan: DaymarkBackupImportPlan): Promise<void>;
 }
 
@@ -788,13 +788,13 @@ export class DaymarkBackupService {
   }
 
   async preview(request: DaymarkBackupImportRequest): Promise<DaymarkBackupImportPreviewResponse> {
-    const current = await this.#repository.loadSnapshot();
+    const current = await this.#repository.loadSnapshot(request.backup);
     const plan = buildDaymarkBackupImportPlan(current, request.backup, this.#idGenerator);
     return { result: "preview", summary: plan.summary };
   }
 
   async apply(request: DaymarkBackupImportRequest): Promise<DaymarkBackupImportResponse> {
-    const current = await this.#repository.loadSnapshot();
+    const current = await this.#repository.loadSnapshot(request.backup);
     const plan = buildDaymarkBackupImportPlan(current, request.backup, this.#idGenerator);
     await this.#repository.apply(plan);
     return { result: "imported", summary: plan.summary };

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DAYMARK_BACKUP_IMPORT_RECORD_BATCH_SIZE,
   createHabitRequestSchema,
   daymarkBackupImportRequestSchema,
   daymarkBackupSnapshotSchema,
@@ -267,6 +268,20 @@ describe("Daymark contracts", () => {
     expect(
       daymarkBackupSnapshotSchema.safeParse({ ...backup, product: "tech-inbox" }).success,
     ).toBe(false);
+  });
+
+  it("bounds one import request without reducing the full backup file limit", () => {
+    const backup = backupFixture();
+    backup.records = Array.from(
+      { length: DAYMARK_BACKUP_IMPORT_RECORD_BATCH_SIZE + 1 },
+      (_, index) => ({
+        ...backup.records[0],
+        id: `record-${index}`,
+        recordDate: new Date(Date.UTC(2026, 8, 1 + index)).toISOString().slice(0, 10),
+      }),
+    );
+    expect(daymarkBackupSnapshotSchema.safeParse(backup).success).toBe(true);
+    expect(daymarkBackupImportRequestSchema.safeParse({ backup }).success).toBe(false);
   });
 
   it.each([

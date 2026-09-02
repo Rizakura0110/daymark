@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./app": "./src/app.tsx",
+    "./backup": "./src/backup.ts",
     "./browser": "./src/browser.ts",
     "./contracts": "./src/contracts.ts",
     "./server": {

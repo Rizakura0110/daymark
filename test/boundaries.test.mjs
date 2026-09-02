@@ -31,6 +31,7 @@ describe("independent product boundaries", () => {
     expect(manifest.private).toBe(true);
     expect(Object.keys(manifest.exports).sort()).toEqual([
       "./app",
+      "./backup",
       "./browser",
       "./contracts",
       "./schema",
@@ -56,6 +57,7 @@ describe("independent product boundaries", () => {
         "app.tsx": ["react", "./contracts.js", "./browser-date.js"],
         "browser-date.ts": [],
         "browser.ts": [],
+        "backup.ts": ["./contracts.js"],
         "contracts.ts": ["zod"],
         "schema.ts": [
           "drizzle-orm/sql",
