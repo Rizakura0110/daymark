@@ -2,14 +2,15 @@
 
 ## Phase 46: 習慣と全履歴の完全削除
 
-状態: 2026-09-24、ローカル実装・検証完了。本番未反映。
+状態: 2026-09-24、ローカル実装・検証と、所有者承認後の基盤Workerへの本番反映が完了。
 
 - 所有者の「習慣を削除できるようにし、削除済み習慣は履歴から消えてよい」という指示を採用。習慣管理の編集画面に、名称と消去範囲を示す確認付き削除を追加した。休止/アーカイブは維持する。
 - 契約・client port・domain/repository portに習慣削除を追加。削除は再送可能な冪等操作とし、基盤の既存D1外部キーで設定履歴・日次記録も同時に消す。schemaとbackup形式は変更しない。
 - UIは削除確認のキャンセルを初期focusにし、処理中の多重操作・閉じる操作を止める。失敗時は確認画面から再試行でき、成功時は一覧を更新して日/週/月の古い表示を破棄する。
 - 週表示から削除画面へ移動するmobile E2Eで、読み上げ用の絶対配置ラベルが横スクロール領域の外へ影響し、ページ幅と固定navigationを広げる既存不具合を発見。scroll領域をpositioned ancestorにし、320px幅の表示と通常クリックを検証する。
 - 単独`pnpm check`のformat/lint/TypeScript・9 files/75 tests・対象coverage全項目100%・宣言付きbuild・audit（既知脆弱性0）が成功。基盤の全体`pnpm check`も成功し、実local D1/HTTPの3年分cascade・他の習慣と記事の保持、PC/mobile E2Eの確認/キャンセル/削除/履歴/export/再読込を検証した。
-- 本番deployは基盤側の別承認が必要。Toki・Tech Inbox、本番データ・Cloudflare設定は変更しない。
+- 所有者の「反映して」を受け、製品`c5afa87`を含む基盤`e45dcff`を既存`rizakura-hontai` Workerへ反映した。製品CI `35997954240`・基盤CI `35997981707`はsuccess。本番versionは`5c6f6360-6937-4c27-9cf2-28d2b0889289`（100%）。DB migration、料金・Access変更、他Workerのdeployはない。
+- 認証済みの本番ブラウザで削除ボタン→確認画面→キャンセル→再読み込みを確認した。実データの削除・作成・更新は行っていない。本番での削除確定、所有者のPC/iPhone実機操作は未確認で、local E2Eの成功と区別する。詳しい反映前後の検査は基盤のProgressを参照。
 
 ## Phase 20: 別repositoryと接続用stub
 
