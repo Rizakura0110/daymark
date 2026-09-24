@@ -137,6 +137,10 @@ export type HabitResponse = z.output<typeof habitResponseSchema>;
 export const deleteHabitRecordResponseSchema = z.strictObject({ result: z.literal("deleted") });
 export type DeleteHabitRecordResponse = z.output<typeof deleteHabitRecordResponseSchema>;
 
+export const deleteHabitRequestSchema = z.strictObject({});
+export const deleteHabitResponseSchema = z.strictObject({ result: z.literal("deleted") });
+export type DeleteHabitResponse = z.output<typeof deleteHabitResponseSchema>;
+
 export const weekResponseSchema = z.strictObject({
   start: daymarkDateSchema,
   end: daymarkDateSchema,

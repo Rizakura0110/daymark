@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   DAYMARK_BACKUP_IMPORT_RECORD_BATCH_SIZE,
   createHabitRequestSchema,
+  deleteHabitRequestSchema,
+  deleteHabitResponseSchema,
   daymarkBackupImportRequestSchema,
   daymarkBackupSnapshotSchema,
   daymarkDateQuerySchema,
@@ -13,6 +15,14 @@ import {
 } from "../src/contracts.ts";
 
 const backupTimestamp = "2026-09-01T00:00:00.000Z";
+
+it("requires an empty delete request and a strict successful response", () => {
+  expect(deleteHabitRequestSchema.parse({})).toEqual({});
+  expect(deleteHabitRequestSchema.safeParse({ all: true }).success).toBe(false);
+  expect(deleteHabitRequestSchema.safeParse(null).success).toBe(false);
+  expect(deleteHabitResponseSchema.parse({ result: "deleted" })).toEqual({ result: "deleted" });
+  expect(deleteHabitResponseSchema.safeParse({ result: "saved" }).success).toBe(false);
+});
 
 const backupFixture = () => ({
   product: "daymark",

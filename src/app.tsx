@@ -46,6 +46,7 @@ export type DaymarkClient = {
   ) => Promise<{ readonly result: "imported"; readonly summary: DaymarkBackupImportSummary }>;
   readonly listHabits: (signal?: AbortSignal) => Promise<ListHabitsResponse>;
   readonly createHabit: (request: CreateHabitRequest, signal?: AbortSignal) => Promise<HabitDto>;
+  readonly deleteHabit: (id: string, signal?: AbortSignal) => Promise<void>;
   readonly renameHabit: (id: string, name: string, signal?: AbortSignal) => Promise<HabitDto>;
   readonly putConfiguration: (
     id: string,
@@ -144,6 +145,8 @@ function Modal({
   const descriptionId = useId();
 
   useEffect(() => {
+    // Switching from editing to deletion confirmation must focus the safe action again.
+    void title;
     const dialog = dialogRef.current;
     if (dialog === null) return;
     if (open) {
@@ -156,7 +159,7 @@ function Modal({
     }
     if (dialog.open && typeof dialog.close === "function") dialog.close();
     else dialog.removeAttribute("open");
-  }, [open]);
+  }, [open, title]);
 
   return (
     <dialog
@@ -380,10 +383,12 @@ function EditHabitDialog({
   today,
   onClose,
   onSave,
+  onDelete,
 }: {
   readonly habit: HabitDto | null;
   readonly today: string;
   readonly onClose: () => void;
+  readonly onDelete: (habit: HabitDto) => Promise<void>;
   readonly onSave: (
     habit: HabitDto,
     name: string,
@@ -397,10 +402,13 @@ function EditHabitDialog({
   const [comparison, setComparison] = useState<"at_least" | "at_most">("at_least");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const submissionRef = useRef(false);
 
   useEffect(() => {
     if (habit === null) return;
     setName(habit.name);
+    setConfirmingDelete(false);
     setStatus(habit.configuration.status);
     if (habit.configuration.kind === "number") {
       setTarget(String(habit.configuration.target));
@@ -412,7 +420,8 @@ function EditHabitDialog({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (habit === null || submitting) return;
+    if (habit === null || submissionRef.current) return;
+    submissionRef.current = true;
     setSubmitting(true);
     setError("");
     try {
@@ -431,129 +440,205 @@ function EditHabitDialog({
     } catch (submissionError) {
       setError(errorMessage(submissionError));
     } finally {
+      submissionRef.current = false;
+      setSubmitting(false);
+    }
+  }
+
+  function close() {
+    if (submissionRef.current) return;
+    if (confirmingDelete) {
+      setConfirmingDelete(false);
+      setError("");
+    } else onClose();
+  }
+
+  async function remove() {
+    if (habit === null || submissionRef.current) return;
+    submissionRef.current = true;
+    setSubmitting(true);
+    setError("");
+    try {
+      await onDelete(habit);
+      onClose();
+    } catch (deletionError) {
+      setError(errorMessage(deletionError));
+    } finally {
+      submissionRef.current = false;
       setSubmitting(false);
     }
   }
 
   return (
     <Modal
-      description={`変更は${formatLongDate(today)}から適用し、過去の達成判定は変えません。`}
-      onClose={onClose}
+      description={
+        confirmingDelete
+          ? `「${habit?.name ?? ""}」と過去の全記録・設定履歴を完全に削除します。日・週・月の履歴と達成率からも除外されます。`
+          : `変更は${formatLongDate(today)}から適用し、過去の達成判定は変えません。`
+      }
+      onClose={close}
       open={habit !== null}
-      title="習慣を編集"
+      title={confirmingDelete ? "習慣を削除" : "習慣を編集"}
     >
-      <form className="space-y-4" onSubmit={(event) => void submit(event)}>
-        <div>
-          <label className="block text-sm font-medium text-slate-700" htmlFor="daymark-edit-name">
-            習慣名
-          </label>
-          <input
-            className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-base outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 sm:text-sm"
-            data-autofocus
-            id="daymark-edit-name"
-            maxLength={80}
-            onChange={(event) => setName(event.currentTarget.value)}
-            required
-            value={name}
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-slate-700" htmlFor="daymark-edit-status">
-            状態
-          </label>
-          <select
-            className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 sm:text-sm"
-            id="daymark-edit-status"
-            onChange={(event) =>
-              setStatus(event.currentTarget.value as "active" | "paused" | "archived")
-            }
-            value={status}
-          >
-            <option value="active">有効</option>
-            <option value="paused">休止</option>
-            <option value="archived">アーカイブ</option>
-          </select>
-          <p className="mt-1 text-xs leading-5 text-slate-500">
-            休止・アーカイブ中は日々の記録と達成率の対象外です。あとから有効へ戻せます。
+      {confirmingDelete ? (
+        <div className="space-y-4">
+          <p className="text-sm leading-6 text-red-800">
+            この操作は取り消せません。履歴を残したい場合は、削除せず休止・アーカイブを選んでください。
           </p>
-        </div>
-        {habit?.configuration.kind === "number" ? (
-          <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
-            <div>
-              <label
-                className="block text-sm font-medium text-slate-700"
-                htmlFor="daymark-edit-target"
-              >
-                目標値
-              </label>
-              <input
-                className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-base outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 sm:text-sm"
-                id="daymark-edit-target"
-                inputMode="decimal"
-                max="1000000000"
-                min="0"
-                onChange={(event) => setTarget(event.currentTarget.value)}
-                required
-                step="0.001"
-                type="number"
-                value={target}
-              />
-            </div>
-            <div>
-              <label
-                className="block text-sm font-medium text-slate-700"
-                htmlFor="daymark-edit-unit"
-              >
-                単位
-              </label>
-              <input
-                className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-base outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 sm:text-sm"
-                id="daymark-edit-unit"
-                maxLength={20}
-                onChange={(event) => setUnit(event.currentTarget.value)}
-                required
-                value={unit}
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <label
-                className="block text-sm font-medium text-slate-700"
-                htmlFor="daymark-edit-comparison"
-              >
-                達成条件
-              </label>
-              <select
-                className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 sm:text-sm"
-                id="daymark-edit-comparison"
-                onChange={(event) =>
-                  setComparison(event.currentTarget.value as "at_least" | "at_most")
-                }
-                value={comparison}
-              >
-                <option value="at_least">目標値以上</option>
-                <option value="at_most">目標値以下</option>
-              </select>
-            </div>
+          {error === "" ? null : (
+            <p className="text-sm text-red-700" role="alert">
+              {error} 結果が不明な場合は、再試行するか一覧を再読み込みしてください。
+            </p>
+          )}
+          <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+            <button
+              className="min-h-11 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              data-autofocus
+              disabled={submitting}
+              onClick={close}
+              type="button"
+            >
+              削除をやめる
+            </button>
+            <button
+              className="min-h-11 rounded-lg bg-red-700 px-5 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-60"
+              disabled={submitting}
+              onClick={() => void remove()}
+              type="button"
+            >
+              {submitting ? "削除中…" : "習慣と全記録を削除"}
+            </button>
           </div>
-        ) : null}
-        {error === "" ? null : <p className="text-sm text-red-700">{error}</p>}
-        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <button
-            className="min-h-11 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-            onClick={onClose}
-            type="button"
-          >
-            キャンセル
-          </button>
-          <button
-            className="min-h-11 rounded-lg bg-blue-600 px-5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
-            disabled={submitting}
-            type="submit"
-          >
-            {submitting ? "保存中…" : "変更を保存"}
-          </button>
         </div>
-      </form>
+      ) : (
+        <form className="space-y-4" onSubmit={(event) => void submit(event)}>
+          <div>
+            <label className="block text-sm font-medium text-slate-700" htmlFor="daymark-edit-name">
+              習慣名
+            </label>
+            <input
+              className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-base outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 sm:text-sm"
+              data-autofocus
+              id="daymark-edit-name"
+              maxLength={80}
+              onChange={(event) => setName(event.currentTarget.value)}
+              required
+              value={name}
+            />
+          </div>
+          <div>
+            <label
+              className="block text-sm font-medium text-slate-700"
+              htmlFor="daymark-edit-status"
+            >
+              状態
+            </label>
+            <select
+              className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 sm:text-sm"
+              id="daymark-edit-status"
+              onChange={(event) =>
+                setStatus(event.currentTarget.value as "active" | "paused" | "archived")
+              }
+              value={status}
+            >
+              <option value="active">有効</option>
+              <option value="paused">休止</option>
+              <option value="archived">アーカイブ</option>
+            </select>
+            <p className="mt-1 text-xs leading-5 text-slate-500">
+              休止・アーカイブ中は日々の記録と達成率の対象外です。あとから有効へ戻せます。
+            </p>
+          </div>
+          {habit?.configuration.kind === "number" ? (
+            <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
+              <div>
+                <label
+                  className="block text-sm font-medium text-slate-700"
+                  htmlFor="daymark-edit-target"
+                >
+                  目標値
+                </label>
+                <input
+                  className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-base outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 sm:text-sm"
+                  id="daymark-edit-target"
+                  inputMode="decimal"
+                  max="1000000000"
+                  min="0"
+                  onChange={(event) => setTarget(event.currentTarget.value)}
+                  required
+                  step="0.001"
+                  type="number"
+                  value={target}
+                />
+              </div>
+              <div>
+                <label
+                  className="block text-sm font-medium text-slate-700"
+                  htmlFor="daymark-edit-unit"
+                >
+                  単位
+                </label>
+                <input
+                  className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3 text-base outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 sm:text-sm"
+                  id="daymark-edit-unit"
+                  maxLength={20}
+                  onChange={(event) => setUnit(event.currentTarget.value)}
+                  required
+                  value={unit}
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label
+                  className="block text-sm font-medium text-slate-700"
+                  htmlFor="daymark-edit-comparison"
+                >
+                  達成条件
+                </label>
+                <select
+                  className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 sm:text-sm"
+                  id="daymark-edit-comparison"
+                  onChange={(event) =>
+                    setComparison(event.currentTarget.value as "at_least" | "at_most")
+                  }
+                  value={comparison}
+                >
+                  <option value="at_least">目標値以上</option>
+                  <option value="at_most">目標値以下</option>
+                </select>
+              </div>
+            </div>
+          ) : null}
+          {error === "" ? null : <p className="text-sm text-red-700">{error}</p>}
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button
+              className="min-h-11 rounded-lg border border-red-300 px-4 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60 sm:mr-auto"
+              disabled={submitting}
+              onClick={() => {
+                setError("");
+                setConfirmingDelete(true);
+              }}
+              type="button"
+            >
+              習慣を削除
+            </button>
+            <button
+              className="min-h-11 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              disabled={submitting}
+              onClick={close}
+              type="button"
+            >
+              キャンセル
+            </button>
+            <button
+              className="min-h-11 rounded-lg bg-blue-600 px-5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+              disabled={submitting}
+              type="submit"
+            >
+              {submitting ? "保存中…" : "変更を保存"}
+            </button>
+          </div>
+        </form>
+      )}
     </Modal>
   );
 }
@@ -982,7 +1067,8 @@ function WeekView({
                 横にスクロールして曜日ごとの記録を確認できます。
               </p>
             </div>
-            <div className="overflow-x-auto">
+            {/* Keep absolutely positioned screen-reader labels inside this scroll area. */}
+            <div className="relative overflow-x-auto">
               <table
                 aria-label="週ごとの習慣達成状況"
                 className="w-full min-w-[48rem] border-collapse text-sm"
@@ -1701,6 +1787,7 @@ export function DaymarkApp({ client, now = defaultNow, portalHref = "/" }: Dayma
   const [refreshHabits, setRefreshHabits] = useState(0);
   const [busyHabitId, setBusyHabitId] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState("");
+  const [mutationNotice, setMutationNotice] = useState("");
   const [addingHabit, setAddingHabit] = useState(false);
   const [editingHabit, setEditingHabit] = useState<HabitDto | null>(null);
 
@@ -1780,6 +1867,7 @@ export function DaymarkApp({ client, now = defaultNow, portalHref = "/" }: Dayma
   const selectSection = useCallback(
     (next: Section) => {
       setMutationError("");
+      setMutationNotice("");
       if (next === "today") setSelectedDate(today);
       setSection(next);
     },
@@ -1832,6 +1920,18 @@ export function DaymarkApp({ client, now = defaultNow, portalHref = "/" }: Dayma
     setRefreshHistory((value) => value + 1);
   }
 
+  async function deleteHabit(habit: HabitDto) {
+    await client.deleteHabit(habit.id);
+    setHabits((current) => current.filter(({ id }) => id !== habit.id));
+    setDay(null);
+    setWeek(null);
+    setMonthData(null);
+    setRefreshDay((value) => value + 1);
+    setRefreshHabits((value) => value + 1);
+    setRefreshHistory((value) => value + 1);
+    setMutationNotice(`「${habit.name}」と過去の全記録を削除しました。`);
+  }
+
   const currentWeek = mondayOf(today);
   const currentMonth = today.slice(0, 7);
   return (
@@ -1859,6 +1959,14 @@ export function DaymarkApp({ client, now = defaultNow, portalHref = "/" }: Dayma
           </a>
         </header>
         <main className="mx-auto min-w-0 max-w-6xl px-4 pb-28 pt-6 sm:px-6 md:pb-12 md:pt-10 lg:px-10">
+          {mutationNotice === "" ? null : (
+            <p
+              className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"
+              role="status"
+            >
+              {mutationNotice}
+            </p>
+          )}
           {mutationError === "" ? null : (
             <div
               className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
@@ -1952,6 +2060,7 @@ export function DaymarkApp({ client, now = defaultNow, portalHref = "/" }: Dayma
       <EditHabitDialog
         habit={editingHabit}
         onClose={() => setEditingHabit(null)}
+        onDelete={deleteHabit}
         onSave={updateHabit}
         today={today}
       />

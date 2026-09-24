@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type DaymarkClient, DaymarkApp } from "../src/app";
 import type { DayResponse, HabitDto, MonthResponse, WeekResponse } from "../src/contracts";
@@ -121,6 +121,7 @@ function client(): DaymarkClient {
     importBackup: vi.fn(async () => ({ result: "imported", summary: backupSummary })),
     listHabits: vi.fn(async () => ({ habits: [checkHabit, numberHabit] })),
     createHabit: vi.fn(async () => checkHabit),
+    deleteHabit: vi.fn(async () => undefined),
     renameHabit: vi.fn(async () => checkHabit),
     putConfiguration: vi.fn(async () => checkHabit),
     getDay: vi.fn(async () => day),
@@ -137,6 +138,81 @@ afterEach(() => {
 });
 
 describe("Daymark application", () => {
+  it("requires deletion confirmation, allows cancel, and refreshes history after success", async () => {
+    const api = client();
+    vi.mocked(api.listHabits)
+      .mockResolvedValue({ habits: [numberHabit] })
+      .mockResolvedValueOnce({ habits: [checkHabit, numberHabit] });
+    render(<DaymarkApp client={api} now={() => new Date(timestamp)} />);
+    await screen.findByRole("heading", { name: "水を飲む" });
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "習慣管理", exact: true })[0] as HTMLElement,
+    );
+    fireEvent.click(
+      (await screen.findAllByRole("button", { name: "編集", exact: true }))[0] as HTMLElement,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "習慣を削除", exact: true }));
+    const confirm = screen.getByRole("dialog", { name: "習慣を削除", exact: true });
+    expect(within(confirm).getByText(/過去の全記録・設定履歴/)).toBeTruthy();
+    expect(document.activeElement).toBe(
+      within(confirm).getByRole("button", { name: "削除をやめる" }),
+    );
+    expect(api.deleteHabit).not.toHaveBeenCalled();
+    fireEvent.click(within(confirm).getByRole("button", { name: "削除をやめる" }));
+    expect(screen.getByRole("dialog", { name: "習慣を編集" })).toBeTruthy();
+    expect(api.deleteHabit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "習慣を削除", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "習慣と全記録を削除", exact: true }));
+    await waitFor(() => expect(api.deleteHabit).toHaveBeenCalledExactlyOnceWith("water"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "習慣を削除" })).toBeNull());
+    expect(screen.getByRole("status").textContent).toContain("過去の全記録を削除しました");
+    await screen.findByRole("heading", { name: "歩く" });
+    expect(screen.queryByRole("heading", { name: "水を飲む" })).toBeNull();
+    expect(api.renameHabit).not.toHaveBeenCalled();
+    expect(api.putConfiguration).not.toHaveBeenCalled();
+    fireEvent.click(screen.getAllByRole("button", { name: "履歴", exact: true })[0] as HTMLElement);
+    await waitFor(() => expect(api.getWeek).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "月", exact: true }));
+    await waitFor(() => expect(api.getMonth).toHaveBeenCalled());
+  });
+
+  it("keeps the confirmation on failure and prevents closing or repeated requests while deleting", async () => {
+    const api = client();
+    let finish: () => void = () => undefined;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    vi.mocked(api.deleteHabit)
+      .mockRejectedValueOnce(new Error("通信失敗"))
+      .mockImplementationOnce(() => pending);
+    render(<DaymarkApp client={api} now={() => new Date(timestamp)} />);
+    await screen.findByRole("heading", { name: "水を飲む" });
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "習慣管理", exact: true })[0] as HTMLElement,
+    );
+    fireEvent.click(
+      (await screen.findAllByRole("button", { name: "編集", exact: true }))[0] as HTMLElement,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "習慣を削除", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "習慣と全記録を削除", exact: true }));
+    expect((await screen.findByRole("alert")).textContent).toContain("通信失敗");
+    fireEvent.click(screen.getByRole("button", { name: "習慣と全記録を削除", exact: true }));
+    const dialog = screen.getByRole("dialog", { name: "習慣を削除", exact: true });
+    expect((screen.getByRole("button", { name: "削除中…" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "削除中…" }));
+    fireEvent.click(screen.getByRole("button", { name: "習慣を削除を閉じる" }));
+    fireEvent(dialog, new Event("cancel", { cancelable: true }));
+    expect(screen.getByRole("dialog", { name: "習慣を削除", exact: true })).toBeTruthy();
+    expect(api.deleteHabit).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      finish();
+      await pending;
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "習慣を削除" })).toBeNull());
+  });
+
   it("records daily check and numeric habits", async () => {
     const api = client();
     render(<DaymarkApp client={api} now={() => new Date("2026-08-31T15:00:00.000Z")} />);

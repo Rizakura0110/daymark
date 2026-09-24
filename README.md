@@ -2,6 +2,8 @@
 
 習慣管理のための製品module。日次のチェック・数値記録、JST基準の達成判定、履歴集計、契約schema、domain service、DB schema、日・週・月・習慣管理のresponsive画面に加え、Phase 23で製品専用JSONバックアップと非破壊復元を実装しました。基盤がHTTP client、D1 adapter、HTML、専用PWAを組み合わせます。
 
+Phase 46では「習慣管理→編集→習慣を削除」から、確認後に習慣と過去の全記録・設定履歴を完全削除できます。日・週・月の履歴と達成率、以後のJSON exportからも除外します。履歴を残す場合は休止・アーカイブを選んでください。ゴミ箱や取り消しはありません。端末へ保存済みの古いバックアップを明示的に復元すると、削除した習慣が再登録される場合があります。本番反映は基盤の承認済みdeployで別途行います。
+
 ## 基盤との関係
 
 [rizakura-hontai](https://github.com/Rizakura0110/rizakura-hontai)からGit submoduleとして取り込みます。npm公開は不要で、packageは`private: true`です。基盤がcommit SHAを固定し、統合test後に承認を得てまとめてdeployします。Daymarkへのpushだけでは本番は変わりません。

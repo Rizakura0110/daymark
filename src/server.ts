@@ -71,6 +71,8 @@ export interface DaymarkRepository {
   listVersions(): Promise<readonly HabitVersionEntity[]>;
   listRecords(start: string, end: string): Promise<readonly HabitRecordEntity[]>;
   createHabit(habit: HabitEntity, version: HabitVersionEntity): Promise<void>;
+  /** Atomically delete the habit, all configurations and records; missing IDs are a no-op. */
+  deleteHabit(id: string): Promise<void>;
   updateHabitName(id: string, name: string, updatedAt: string): Promise<boolean>;
   upsertVersion(version: HabitVersionEntity): Promise<boolean>;
   upsertRecord(record: HabitRecordEntity): Promise<boolean>;
@@ -342,6 +344,11 @@ export class DaymarkService {
     );
     await this.#repository.createHabit(habit, version);
     return { habit: this.#habitDto(habit, version) };
+  }
+
+  async deleteHabit(id: string): Promise<void> {
+    // Idempotent so an uncertain network result can safely be retried.
+    await this.#repository.deleteHabit(id);
   }
 
   async renameHabit(id: string, request: RenameHabitRequest): Promise<HabitResponse> {

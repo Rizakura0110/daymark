@@ -29,6 +29,12 @@ class MemoryRepository {
     this.versions.push(version);
   }
 
+  async deleteHabit(id) {
+    this.habits = this.habits.filter((habit) => habit.id !== id);
+    this.versions = this.versions.filter((version) => version.habitId !== id);
+    this.records = this.records.filter((record) => record.habitId !== id);
+  }
+
   async updateHabitName(id, name, updatedAt) {
     if (this.failNameUpdate) return false;
     const index = this.habits.findIndex((habit) => habit.id === id);
@@ -146,6 +152,41 @@ describe("date and numeric primitives", () => {
 });
 
 describe("habit management", () => {
+  it.each(["active", "paused", "archived"])(
+    "deletes a %s habit and its entire history, not other habits",
+    async (status) => {
+      const { service, repository } = serviceFixture();
+      repository.habits.push(habit(), numberHabit());
+      repository.versions.push(
+        checkVersion(),
+        checkVersion({ id: "later", effectiveFrom: "2026-09-01", status }),
+        numberVersion(),
+      );
+      repository.records.push(record(), record({ id: "today", recordDate: "2026-09-01" }));
+      await service.deleteHabit("habit-check");
+      await service.deleteHabit("habit-check");
+      await service.deleteHabit("missing");
+      expect(repository.habits).toEqual([numberHabit()]);
+      expect(repository.versions).toEqual([numberVersion()]);
+      expect(repository.records).toEqual([]);
+      expect((await service.getDay("2026-08-24")).habits.map(({ habitId }) => habitId)).toEqual([
+        "habit-number",
+      ]);
+      expect((await service.getWeek("2026-08-24")).habits.map(({ habitId }) => habitId)).toEqual([
+        "habit-number",
+      ]);
+      expect((await service.getMonth("2026-08")).summary.complete).toBe(0);
+      await expect(
+        service.putRecord("habit-check", "2026-09-01", { kind: "check", checked: true }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await service.deleteHabit("habit-number");
+      expect((await service.listHabits()).habits).toEqual([]);
+      expect((await service.getDay("2026-09-01")).summary).toMatchObject({ due: 0, rate: null });
+      expect((await service.getWeek("2026-08-31")).summary).toMatchObject({ due: 0, rate: null });
+      expect((await service.getMonth("2026-09")).summary).toMatchObject({ due: 0, rate: null });
+    },
+  );
+
   it("creates, lists, renames, and versions both habit kinds", async () => {
     const { service } = serviceFixture();
     const createdCheck = await service.createHabit({ name: "朝の運動", kind: "check" });
