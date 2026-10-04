@@ -6,6 +6,7 @@ registries:
 
 overrides:
   'rolldown@': 1.2.4
+  'jsdom@30.0.1>undici': 8.10.2
 
 storeDir: .pnpm-store
 cacheDir: .cache/pnpm
